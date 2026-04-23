@@ -42,15 +42,15 @@ pub enum ErrorCode {
     ServicesNotConfigured = 14,
     ValidationError = 15,
     RateLimitExceeded = 16,
-    NotInitialized = 16,
     AttestationNotFound = 17,
     InvalidSep10Token = 18,
-    KycNotFound = 19,
-    KycPending = 20,
-    KycRejected = 21,
+    NotInitialized = 20,
+    KycNotFound = 21,
+    KycPending = 22,
+    KycRejected = 23,
+    IllegalTransition = 24,
     CacheExpired = 48,
     CacheNotFound = 49,
-    IllegalTransition = 20,
 }
 
 impl ErrorCode {
@@ -326,6 +326,7 @@ mod tests {
             ErrorCode::KycNotFound,
             ErrorCode::KycPending,
             ErrorCode::KycRejected,
+            ErrorCode::IllegalTransition,
             ErrorCode::CacheExpired,
             ErrorCode::CacheNotFound,
         ];

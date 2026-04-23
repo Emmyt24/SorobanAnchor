@@ -154,6 +154,8 @@ pub struct RoutingOptions {
     pub min_reputation: u32,
     pub max_anchors: u32,
     pub require_kyc: bool,
+    pub require_compliance: bool,
+    pub subject: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +969,35 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Compliance check recording (#37)
+    // -----------------------------------------------------------------------
+
+    /// Record a compliance check result for a subject (admin-only).
+    /// Stores a `ComplianceCheck` record and emits a `compliance_checked` event.
+    pub fn record_compliance_check(
+        env: Env,
+        subject: Address,
+        check_type: String,
+        passed: bool,
+    ) {
+        Self::require_admin(&env);
+        let now = env.ledger().timestamp();
+        let record = ComplianceCheck {
+            subject: subject.clone(),
+            check_type: check_type.clone(),
+            result: if passed { 1u32 } else { 0u32 },
+            timestamp: now,
+        };
+        let key = compliance_check_key(&subject, &check_type);
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
+        env.events().publish(
+            (symbol_short!("compliance"), symbol_short!("checked"), subject),
+            record,
+        );
+    }
+
     pub fn create_session(env: Env, initiator: Address) -> u64 {
         initiator.require_auth();
         let inst = env.storage().instance();
@@ -1452,6 +1483,20 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
 
         if candidates.is_empty() {
             panic_with_error!(&env, ErrorCode::NoQuotesAvailable);
+        }
+
+        // Enforce compliance check (#38)
+        if options.require_compliance {
+            // Look for any passing compliance record for this subject
+            // We check the generic "kyc" check_type as the standard compliance gate
+            let comp_key = compliance_check_key(&options.subject, &String::from_str(&env, "kyc"));
+            let passed = env.storage().persistent()
+                .get::<_, ComplianceCheck>(&comp_key)
+                .map(|r| r.result == 1u32)
+                .unwrap_or(false);
+            if !passed {
+                panic_with_error!(&env, ErrorCode::ComplianceNotMet);
+            }
         }
 
         // Apply strategy: pick best candidate
