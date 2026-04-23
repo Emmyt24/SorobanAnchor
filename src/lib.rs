@@ -34,6 +34,7 @@ pub use sep6::{
     TransactionStatus, TransactionStatusResponse, WithdrawalResponse,
 };
 pub use contract::{AnchorKitContract, EndpointUpdated, get_endpoint, set_endpoint};
+pub use transaction_state_tracker::{TransactionState, TransactionStateRecord};
 
 #[cfg(test)]
 mod request_id_tests;
