@@ -40,6 +40,16 @@ enum Commands {
         subject: String,
         #[arg(long)]
         payload_hash: String,
+        #[arg(long)]
+        contract_id: String,
+        #[arg(long, default_value = "testnet")]
+        network: String,
+        #[arg(long, default_value = "default")]
+        source: String,
+        #[arg(long)]
+        issuer: String,
+        #[arg(long)]
+        session_id: Option<u64>,
     },
     /// Check environment setup
     Doctor,
@@ -172,6 +182,78 @@ fn register(
     }
 }
 
+fn attest(
+    subject: &str,
+    payload_hash: &str,
+    contract_id: &str,
+    network: &str,
+    source: &str,
+    issuer: &str,
+    session_id: Option<u64>,
+) {
+    let rpc_url = match network {
+        "mainnet"   => "https://horizon.stellar.org",
+        "futurenet" => "https://rpc-futurenet.stellar.org",
+        _           => "https://soroban-testnet.stellar.org",
+    };
+    let network_passphrase = match network {
+        "mainnet"   => "Public Global Stellar Network ; September 2015",
+        "futurenet" => "Test SDF Future Network ; October 2022",
+        _           => "Test SDF Network ; September 2015",
+    };
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time error")
+        .as_secs()
+        .to_string();
+
+    let mut args = vec![
+        "contract", "invoke",
+        "--id", contract_id,
+        "--source", source,
+        "--rpc-url", rpc_url,
+        "--network-passphrase", network_passphrase,
+        "--",
+    ];
+
+    let session_str;  // keep alive for the lifetime of args
+    if let Some(sid) = session_id {
+        session_str = sid.to_string();
+        args.extend_from_slice(&[
+            "submit_attestation_with_session",
+            "--session_id", &session_str,
+            "--issuer", issuer,
+            "--subject", subject,
+            "--timestamp", &timestamp,
+            "--payload_hash", payload_hash,
+            "--signature", payload_hash, // placeholder: real sig provided by Stellar CLI signer
+        ]);
+    } else {
+        args.extend_from_slice(&[
+            "submit_attestation",
+            "--issuer", issuer,
+            "--subject", subject,
+            "--timestamp", &timestamp,
+            "--payload_hash", payload_hash,
+            "--signature", payload_hash, // placeholder: real sig provided by Stellar CLI signer
+        ]);
+    }
+
+    let output = std::process::Command::new("stellar")
+        .args(&args)
+        .output()
+        .expect("failed to run stellar contract invoke — is the Stellar CLI installed?");
+
+    if output.status.success() {
+        let attestation_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        println!("Attestation ID: {attestation_id}");
+    } else {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -181,8 +263,8 @@ fn main() {
         Commands::Register { address, services, contract_id, network, source, sep10_token, sep10_issuer } => {
             register(&address, &services, &contract_id, &network, &source, &sep10_token, &sep10_issuer);
         }
-        Commands::Attest { subject, payload_hash } => {
-            println!("Attesting subject {subject} with payload hash {payload_hash}");
+        Commands::Attest { subject, payload_hash, contract_id, network, source, issuer, session_id } => {
+            attest(&subject, &payload_hash, &contract_id, &network, &source, &issuer, session_id);
         }
         Commands::Doctor => {
             println!("Checking environment...");
