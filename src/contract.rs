@@ -7,6 +7,7 @@ use crate::deterministic_hash::{compute_payload_hash, verify_payload_hash};
 use crate::errors::ErrorCode;
 use crate::rate_limiter::RateLimiter;
 use crate::sep10_jwt;
+use crate::transaction_state_tracker::TransactionStateRecord;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1398,6 +1399,24 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
         match Self::get_anchor_asset_info(env, anchor, asset_code) {
             asset => asset.withdrawal_enabled,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transaction state records
+    // -----------------------------------------------------------------------
+
+    pub fn store_transaction_record(env: Env, record: TransactionStateRecord) {
+        Self::require_admin(&env);
+        let key = (symbol_short!("TXREC"), record.transaction_id);
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
+    }
+
+    pub fn get_transaction_record(env: Env, transaction_id: u64) -> TransactionStateRecord {
+        env.storage()
+            .persistent()
+            .get::<_, TransactionStateRecord>(&(symbol_short!("TXREC"), transaction_id))
+            .unwrap_or_else(|| panic_with_error!(&env, ErrorCode::AttestationNotFound))
     }
 
     // -----------------------------------------------------------------------
