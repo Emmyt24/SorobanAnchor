@@ -10,6 +10,7 @@ mod response_validator;
 mod retry;
 mod transaction_state_tracker;
 pub mod sep6;
+pub mod sep24;
 pub mod contract;
 
 pub use domain_validator::validate_anchor_domain;
@@ -33,7 +34,13 @@ pub use sep6::{
     RawDepositResponse, RawTransactionResponse, RawWithdrawalResponse, TransactionKind,
     TransactionStatus, TransactionStatusResponse, WithdrawalResponse,
 };
+pub use sep24::{
+    initiate_interactive_deposit, initiate_interactive_withdrawal, fetch_sep24_transaction_status,
+    InteractiveDepositResponse, InteractiveWithdrawalResponse, Sep24TransactionStatusResponse,
+    RawInteractiveDepositResponse, RawInteractiveWithdrawalResponse, RawSep24TransactionResponse,
+};
 pub use contract::{AnchorKitContract, EndpointUpdated, get_endpoint, set_endpoint};
+pub use transaction_state_tracker::{TransactionState, TransactionStateRecord};
 
 #[cfg(test)]
 mod request_id_tests;

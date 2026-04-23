@@ -5,7 +5,9 @@ use soroban_sdk::{
 
 use crate::deterministic_hash::{compute_payload_hash, verify_payload_hash};
 use crate::errors::ErrorCode;
+use crate::rate_limiter::RateLimiter;
 use crate::sep10_jwt;
+use crate::transaction_state_tracker::{TransactionState, TransactionStateRecord};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -320,16 +322,10 @@ pub struct EndpointUpdated {
 
 #[contracttype]
 #[derive(Clone)]
-struct KycApprovedEvent {
-    subject: Address,
-    timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone)]
-struct KycRejectedEvent {
-    subject: Address,
-    reason_hash: Bytes,
+struct TxStateChangedEvent {
+    transaction_id: u64,
+    old_state: u32,
+    new_state: u32,
     timestamp: u64,
 }
 
@@ -596,7 +592,13 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
     ) -> u64 {
         issuer.require_auth();
         Self::check_attestor(&env, &issuer);
+        Self::enforce_rate_limit(&env, &issuer);
         Self::check_timestamp(&env, timestamp);
+
+        let config = RateLimiter::get_config(&env);
+        if RateLimiter::check_and_increment(&env, &issuer, &config).is_err() {
+            panic_with_error!(&env, ErrorCode::RateLimitExceeded);
+        }
 
         let used_key = (symbol_short!("USED"), payload_hash.clone());
         if env.storage().persistent().has(&used_key) {
@@ -715,6 +717,7 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
     ) -> u64 {
         issuer.require_auth();
         Self::check_attestor(&env, &issuer);
+        Self::enforce_rate_limit(&env, &issuer);
         Self::check_timestamp(&env, timestamp);
 
         let used_key = (symbol_short!("USED"), payload_hash.clone());
@@ -976,6 +979,7 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
     ) -> u64 {
         issuer.require_auth();
         Self::check_attestor(&env, &issuer);
+        Self::enforce_rate_limit(&env, &issuer);
         Self::check_timestamp(&env, timestamp);
 
         let used_key = (symbol_short!("USED"), payload_hash.clone());
@@ -1517,102 +1521,50 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
     }
 
     // -----------------------------------------------------------------------
-    // KYC and Compliance
+    // Transaction state
     // -----------------------------------------------------------------------
 
-    pub fn approve_kyc(env: Env, subject: Address) {
-        Self::require_admin(&env);
-        let ts = env.ledger().timestamp();
-        let kyc_record = KycRecord {
-            subject: subject.clone(),
-            status: 1, // Approved
-            timestamp: ts,
-            rejection_reason_hash: None,
-        };
-        let key = kyc_record_key(&subject);
-        env.storage().persistent().set(&key, &kyc_record);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
-
-        env.events().publish(
-            (symbol_short!("KYC_APPROVED"),),
-            KycApprovedEvent {
-                subject,
-                timestamp: ts,
-            },
-        );
-    }
-
-    pub fn reject_kyc(env: Env, subject: Address, reason_hash: Bytes) {
-        Self::require_admin(&env);
-        let ts = env.ledger().timestamp();
-        let kyc_record = KycRecord {
-            subject: subject.clone(),
-            status: 2, // Rejected
-            timestamp: ts,
-            rejection_reason_hash: Some(reason_hash.clone()),
-        };
-        let key = kyc_record_key(&subject);
-        env.storage().persistent().set(&key, &kyc_record);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
-
-        env.events().publish(
-            (symbol_short!("KYC_REJECTED"),),
-            KycRejectedEvent {
-                subject,
-                reason_hash,
-                timestamp: ts,
-            },
-        );
-    }
-
-    pub fn get_kyc_status(env: Env, subject: Address) -> u32 {
-        let key = kyc_record_key(&subject);
-        env.storage()
-            .persistent()
-            .get::<_, KycRecord>(&key)
-            .map(|record| record.status)
-            .unwrap_or_else(|| panic_with_error!(&env, ErrorCode::KycNotFound))
-    }
-
-    pub fn store_compliance_check(
+    pub fn create_transaction_record(
         env: Env,
-        subject: Address,
-        check_type: String,
-        result: u32,
-    ) {
-        let ts = env.ledger().timestamp();
-        let compliance_check = ComplianceCheck {
-            subject: subject.clone(),
-            check_type: check_type.clone(),
-            result,
-            timestamp: ts,
+        transaction_id: u64,
+        initiator: Address,
+    ) -> TransactionStateRecord {
+        let now = env.ledger().timestamp();
+        let record = TransactionStateRecord {
+            transaction_id,
+            state: TransactionState::Pending,
+            initiator,
+            timestamp: now,
+            last_updated: now,
+            error_message: None,
         };
-        let key = compliance_check_key(&subject, &check_type);
-        env.storage().persistent().set(&key, &compliance_check);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
+        let key = (symbol_short!("TXSTATE"), transaction_id);
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(&key, PERSISTENT_TTL, PERSISTENT_TTL);
+        record
     }
 
-    pub fn get_compliance_check(
-        env: Env,
-        subject: Address,
-        check_type: String,
-    ) -> ComplianceCheck {
-        let key = compliance_check_key(&subject, &check_type);
-        env.storage()
-            .persistent()
-            .get::<_, ComplianceCheck>(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, ErrorCode::ComplianceNotMet))
+    // -----------------------------------------------------------------------
+    // Rate limit configuration
+    // -----------------------------------------------------------------------
+
+    pub fn set_rate_limit_config(env: Env, max_submissions: u32, window_length: u32) {
+        Self::require_admin(&env);
+        let config = crate::rate_limiter::RateLimitConfig { max_submissions, window_length };
+        RateLimiter::update_config(&env, &Self::get_admin(env.clone()), &config)
+            .unwrap_or_else(|_| panic_with_error!(&env, ErrorCode::ValidationError));
     }
 
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    fn enforce_rate_limit(env: &Env, attestor: &Address) {
+        let config = RateLimiter::get_config(env);
+        if RateLimiter::check_and_increment(env, attestor, &config).is_err() {
+            panic_with_error!(env, ErrorCode::RateLimitExceeded);
+        }
+    }
 
     fn require_admin(env: &Env) {
         let admin: Address = env

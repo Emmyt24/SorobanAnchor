@@ -1,4 +1,8 @@
-use soroban_sdk::{contracttype, Address, Env, String};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, String};
+
+use crate::errors::AnchorKitError;
+
+const TXSTATE_TTL: u32 = 1_555_200;
 
 /// Transaction states for the state tracker
 #[contracttype]
@@ -29,6 +33,17 @@ impl TransactionState {
             "failed" => Some(TransactionState::Failed),
             _ => None,
         }
+    }
+
+    /// Returns true only for legal forward transitions:
+    /// Pending → InProgress, InProgress → Completed, InProgress → Failed
+    pub fn is_valid_transition(&self, to: TransactionState) -> bool {
+        matches!(
+            (self, to),
+            (TransactionState::Pending, TransactionState::InProgress)
+                | (TransactionState::InProgress, TransactionState::Completed)
+                | (TransactionState::InProgress, TransactionState::Failed)
+        )
     }
 }
 
@@ -80,6 +95,10 @@ impl TransactionStateTracker {
 
         if self.is_dev_mode {
             self.cache.push(record.clone());
+        } else {
+            let key = (symbol_short!("TXSTATE"), transaction_id);
+            env.storage().persistent().set(&key, &record);
+            env.storage().persistent().extend_ttl(&key, TXSTATE_TTL, TXSTATE_TTL);
         }
 
         Ok(record)
@@ -132,6 +151,17 @@ impl TransactionStateTracker {
             // Search and update in cache
             for record in self.cache.iter_mut() {
                 if record.transaction_id == transaction_id {
+                    if !record.state.is_valid_transition(new_state) {
+                        return Err(String::from_str(
+                            env,
+                            AnchorKitError::illegal_transition(
+                                record.state.as_str(),
+                                new_state.as_str(),
+                            )
+                            .message
+                            .as_str(),
+                        ));
+                    }
                     record.state = new_state;
                     record.last_updated = current_time;
                     record.error_message = error_message;
@@ -143,19 +173,45 @@ impl TransactionStateTracker {
                 "Transaction not found in cache",
             ));
         } else {
-            // In production, data would be persisted to DB
-            // For dev mode, use a dummy address
-            let dummy_address = Address::from_string(&String::from_str(env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));
-            let mut record = TransactionStateRecord {
-                transaction_id,
-                state: new_state,
-                initiator: dummy_address,
-                timestamp: current_time,
-                last_updated: current_time,
-                error_message,
-            };
+            let key = (symbol_short!("TXSTATE"), transaction_id);
+            let mut record: TransactionStateRecord = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or_else(|| String::from_str(env, "Transaction not found"))?;
+
+            if !record.state.is_valid_transition(new_state) {
+                return Err(String::from_str(
+                    env,
+                    AnchorKitError::illegal_transition(
+                        record.state.as_str(),
+                        new_state.as_str(),
+                    )
+                    .message
+                    .as_str(),
+                ));
+            }
+
+            record.state = new_state;
+            record.last_updated = current_time;
+            record.error_message = error_message;
+
+            env.storage().persistent().set(&key, &record);
+            env.storage().persistent().extend_ttl(&key, TXSTATE_TTL, TXSTATE_TTL);
+
             Ok(record)
         }
+    }
+
+    /// Advance a transaction to `new_state`, enforcing legal transition rules.
+    /// Returns an error if the transition is illegal or the transaction is not found.
+    pub fn advance_transaction_state(
+        &mut self,
+        transaction_id: u64,
+        new_state: TransactionState,
+        env: &Env,
+    ) -> Result<TransactionStateRecord, String> {
+        self.update_state(transaction_id, new_state, None, env)
     }
 
     /// Get transaction state by ID
@@ -172,8 +228,10 @@ impl TransactionStateTracker {
             }
             Ok(None)
         } else {
-            // In production, this would query the DB
-            Ok(None)
+            Ok(env
+                .storage()
+                .persistent()
+                .get(&(symbol_short!("TXSTATE"), transaction_id)))
         }
     }
 
@@ -357,5 +415,50 @@ mod tests {
 
         assert!(clear_result.is_ok());
         assert_eq!(tracker.cache_size(), 0);
+    }
+
+    #[test]
+    fn test_is_valid_transition() {
+        assert!(TransactionState::Pending.is_valid_transition(TransactionState::InProgress));
+        assert!(TransactionState::InProgress.is_valid_transition(TransactionState::Completed));
+        assert!(TransactionState::InProgress.is_valid_transition(TransactionState::Failed));
+
+        assert!(!TransactionState::Pending.is_valid_transition(TransactionState::Completed));
+        assert!(!TransactionState::Pending.is_valid_transition(TransactionState::Failed));
+        assert!(!TransactionState::Completed.is_valid_transition(TransactionState::InProgress));
+        assert!(!TransactionState::Failed.is_valid_transition(TransactionState::InProgress));
+        assert!(!TransactionState::Completed.is_valid_transition(TransactionState::Pending));
+    }
+
+    #[test]
+    fn test_advance_transaction_state_legal() {
+        let env = Env::default();
+        let mut tracker = TransactionStateTracker::new(true);
+        let initiator = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+        tracker.create_transaction(1, initiator.clone(), &env).ok();
+
+        let r = tracker.advance_transaction_state(1, TransactionState::InProgress, &env);
+        assert!(r.is_ok());
+        assert_eq!(r.unwrap().state, TransactionState::InProgress);
+
+        let r = tracker.advance_transaction_state(1, TransactionState::Completed, &env);
+        assert!(r.is_ok());
+        assert_eq!(r.unwrap().state, TransactionState::Completed);
+    }
+
+    #[test]
+    fn test_advance_transaction_state_illegal() {
+        let env = Env::default();
+        let mut tracker = TransactionStateTracker::new(true);
+        let initiator = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+        tracker.create_transaction(1, initiator.clone(), &env).ok();
+        tracker.advance_transaction_state(1, TransactionState::InProgress, &env).ok();
+        tracker.advance_transaction_state(1, TransactionState::Completed, &env).ok();
+
+        // Completed → InProgress must be rejected
+        let r = tracker.advance_transaction_state(1, TransactionState::InProgress, &env);
+        assert!(r.is_err());
     }
 }
