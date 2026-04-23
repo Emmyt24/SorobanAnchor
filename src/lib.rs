@@ -35,7 +35,7 @@ pub use sep6::{
     TransactionStatus, TransactionStatusResponse, WithdrawalResponse,
 };
 pub use sep38::{
-    fetch_prices, Price, RawPrice,
+    fetch_prices, request_firm_quote, Price, FirmQuote, RawPrice, RawFirmQuote,
 };
 pub use contract::{AnchorKitContract, EndpointUpdated, get_endpoint, set_endpoint};
 
