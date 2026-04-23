@@ -7,6 +7,7 @@ use crate::deterministic_hash::{compute_payload_hash, verify_payload_hash};
 use crate::errors::ErrorCode;
 use crate::rate_limiter::RateLimiter;
 use crate::sep10_jwt;
+use crate::transaction_state_tracker::{TransactionState, TransactionStateRecord};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -286,6 +287,15 @@ struct AttestEvent {
 pub struct EndpointUpdated {
     pub attestor: Address,
     pub endpoint: String,
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct TxStateChangedEvent {
+    transaction_id: u64,
+    old_state: u32,
+    new_state: u32,
+    timestamp: u64,
 }
 
 // ---------------------------------------------------------------------------

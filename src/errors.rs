@@ -47,6 +47,7 @@ pub enum ErrorCode {
     InvalidSep10Token = 18,
     CacheExpired = 48,
     CacheNotFound = 49,
+    IllegalTransition = 20,
 }
 
 impl ErrorCode {
@@ -74,6 +75,7 @@ impl ErrorCode {
             ErrorCode::InvalidSep10Token => "SEP-10 JWT is missing, expired, or invalid",
             ErrorCode::CacheExpired => "Cache entry has expired",
             ErrorCode::CacheNotFound => "Cache entry not found",
+            ErrorCode::IllegalTransition => "Illegal transaction state transition",
         }
     }
 }
@@ -198,6 +200,14 @@ impl AnchorKitError {
 
     pub fn rate_limit_exceeded() -> Self {
         Self::from_code(ErrorCode::RateLimitExceeded)
+    }
+
+    pub fn illegal_transition(from: &str, to: &str) -> Self {
+        Self::with_context(
+            ErrorCode::IllegalTransition,
+            ErrorCode::IllegalTransition.default_message(),
+            &alloc::format!("{} -> {}", from, to),
+        )
     }
 }
 
