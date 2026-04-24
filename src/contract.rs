@@ -449,7 +449,7 @@ impl AnchorKitContract {
             .persistent()
             .get(&(symbol_short!("SEP10KEY"), issuer.clone()))
             .unwrap_or_else(|| panic_with_error!(&env, ErrorCode::InvalidSep10Token));
-        if sep10_jwt::verify_sep10_jwt(&env, &token, &pk, None).is_err() {
+        if sep10_jwt::verify_sep10_jwt(&env, &token, &pk, None, None).is_err() {
             panic_with_error!(&env, ErrorCode::InvalidSep10Token);
         }
     }
@@ -466,7 +466,7 @@ impl AnchorKitContract {
             .get(&(symbol_short!("SEP10KEY"), issuer.clone()))
             .unwrap_or_else(|| panic_with_error!(env, ErrorCode::InvalidSep10Token));
         let expected = attestor.to_string();
-        if sep10_jwt::verify_sep10_jwt(env, token, &pk, Some(&expected)).is_err() {
+        if sep10_jwt::verify_sep10_jwt(env, token, &pk, Some(&expected), None).is_err() {
             panic_with_error!(env, ErrorCode::InvalidSep10Token);
         }
     }
@@ -1749,6 +1749,11 @@ pub fn is_attestor(env: Env, attestor: Address) -> bool {
         ttl_seconds: u64,
     ) {
         anchor.require_auth();
+        // Validate transfer_server and web_auth_endpoint before caching
+        crate::validate_anchor_domain(toml_data.transfer_server.as_str())
+            .unwrap_or_else(|_| panic_with_error!(&env, ErrorCode::InvalidEndpointFormat));
+        crate::validate_anchor_domain(toml_data.web_auth_endpoint.as_str())
+            .unwrap_or_else(|_| panic_with_error!(&env, ErrorCode::InvalidEndpointFormat));
         let now = env.ledger().timestamp();
         let cached = CachedToml {
             toml: toml_data,

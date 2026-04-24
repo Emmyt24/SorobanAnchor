@@ -105,15 +105,41 @@ fn parse_json_sub(env: &Env, payload: &[u8]) -> Result<String, ()> {
     Err(())
 }
 
-/// Verify a SEP-10-style JWT: JWS compact, EdDSA signature, `exp`, and optional `sub` match.
+/// Parse first `"iss":"..."` string value (no escape sequences inside value).
+fn parse_json_iss(env: &Env, payload: &[u8]) -> Result<String, ()> {
+    let key = b"\"iss\":";
+    let pos = find_bytes(payload, key).ok_or(())?;
+    let mut i = pos + key.len();
+    while i < payload.len() && payload[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= payload.len() || payload[i] != b'"' {
+        return Err(());
+    }
+    i += 1;
+    let start = i;
+    while i < payload.len() {
+        if payload[i] == b'"' {
+            let iss = &payload[start..i];
+            return Ok(String::from_bytes(env, iss));
+        }
+        i += 1;
+    }
+    Err(())
+}
+
+/// Verify a SEP-10-style JWT: JWS compact, EdDSA signature, `exp`, optional `sub` match, and optional `iss` match.
 ///
 /// When `expected_sub` is [`None`], the token must still contain a parseable `sub` claim, but it
 /// is not compared to a caller-supplied address (see contract `verify_sep10_token`).
+///
+/// When `expected_iss` is [`Some`], the `iss` claim must be present and match the provided value.
 pub fn verify_sep10_jwt(
     env: &Env,
     token: &String,
     anchor_public_key: &Bytes,
     expected_sub: Option<&String>,
+    expected_iss: Option<&String>,
 ) -> Result<(), ()> {
     if anchor_public_key.len() != 32 {
         return Err(());
@@ -187,6 +213,13 @@ pub fn verify_sep10_jwt(
         }
     }
 
+    if let Some(expected) = expected_iss {
+        let iss = parse_json_iss(env, &payload_dec)?;
+        if iss != *expected {
+            return Err(());
+        }
+    }
+
     Ok(())
 }
 
@@ -214,9 +247,16 @@ mod tests {
     }
 
     fn build_jwt(signing_key: &SigningKey, sub: &str, exp: u64) -> std::string::String {
+        build_jwt_with_iss(signing_key, sub, exp, None)
+    }
+
+    fn build_jwt_with_iss(signing_key: &SigningKey, sub: &str, exp: u64, iss: Option<&str>) -> std::string::String {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         let header = r#"{"alg":"EdDSA","typ":"JWT"}"#;
-        let payload = format!(r#"{{"sub":"{}","exp":{}}}"#, sub, exp);
+        let payload = match iss {
+            Some(i) => format!(r#"{{"sub":"{}","exp":{},"iss":"{}"}}"#, sub, exp, i),
+            None => format!(r#"{{"sub":"{}","exp":{}}}"#, sub, exp),
+        };
         let header_b64 = URL_SAFE_NO_PAD.encode(header);
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
         let signing_input = format!("{}.{}", header_b64, payload_b64);
@@ -244,8 +284,8 @@ mod tests {
         let jwt = build_jwt(&signing_key, sub_str.as_str(), 2_000);
         let token = String::from_str(&env, jwt.as_str());
 
-        assert!(verify_sep10_jwt(&env, &token, &pk, Some(&sub)).is_ok());
-        assert!(verify_sep10_jwt(&env, &token, &pk, None).is_ok());
+        assert!(verify_sep10_jwt(&env, &token, &pk, Some(&sub), None).is_ok());
+        assert!(verify_sep10_jwt(&env, &token, &pk, None, None).is_ok());
     }
 
     #[test]
