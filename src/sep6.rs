@@ -24,6 +24,12 @@ pub enum TransactionStatus {
     Completed,
     Refunded,
     Expired,
+    /// No market exists for the requested asset pair (SEP-6 `no_market`).
+    NoMarket,
+    /// Requested amount is below the anchor's minimum (SEP-6 `too_small`).
+    TooSmall,
+    /// Requested amount exceeds the anchor's maximum (SEP-6 `too_large`).
+    TooLarge,
     Error,
 }
 
@@ -39,6 +45,9 @@ impl TransactionStatus {
             "expired" => Self::Expired,
             "incomplete" => Self::Incomplete,
             "pending" => Self::Pending,
+            "no_market" => Self::NoMarket,
+            "too_small" => Self::TooSmall,
+            "too_large" => Self::TooLarge,
             _ => Self::Error,
         }
     }
@@ -54,6 +63,9 @@ impl TransactionStatus {
             Self::Completed => "completed",
             Self::Refunded => "refunded",
             Self::Expired => "expired",
+            Self::NoMarket => "no_market",
+            Self::TooSmall => "too_small",
+            Self::TooLarge => "too_large",
             Self::Error => "error",
         }
     }
@@ -76,6 +88,12 @@ pub struct DepositResponse {
     pub fee_fixed: Option<u64>,
     /// Current status of the transaction.
     pub status: TransactionStatus,
+    /// Whether clawback is enabled for this deposit (SEP-6 `clawback_enabled`).
+    pub clawback_enabled: Option<bool>,
+    /// Stellar memo for identifying the sender, if provided.
+    pub stellar_memo: Option<String>,
+    /// Type of `stellar_memo` (e.g. `"text"`, `"id"`, `"hash"`), if provided.
+    pub stellar_memo_type: Option<String>,
 }
 
 /// Normalized response for a withdrawal initiation.
@@ -144,6 +162,12 @@ pub struct RawDepositResponse {
     pub fee_fixed: Option<u64>,
     /// Raw status string from the anchor (e.g. `"pending_external"`).
     pub status: Option<String>,
+    /// Whether clawback is enabled for this deposit.
+    pub clawback_enabled: Option<bool>,
+    /// Stellar memo for identifying the sender.
+    pub stellar_memo: Option<String>,
+    /// Type of `stellar_memo`.
+    pub stellar_memo_type: Option<String>,
 }
 
 /// Raw fields from an anchor's `/withdraw` response.
@@ -191,6 +215,9 @@ pub fn initiate_deposit(raw: RawDepositResponse) -> Result<DepositResponse, Erro
             .as_deref()
             .map(TransactionStatus::from_str)
             .unwrap_or(TransactionStatus::Pending),
+        clawback_enabled: raw.clawback_enabled,
+        stellar_memo: raw.stellar_memo,
+        stellar_memo_type: raw.stellar_memo_type,
     })
 }
 
@@ -285,6 +312,9 @@ mod tests {
             max_amount: Some(10_000),
             fee_fixed: Some(1),
             status: Some("pending_external".to_string()),
+            clawback_enabled: None,
+            stellar_memo: None,
+            stellar_memo_type: None,
         }
     }
 
