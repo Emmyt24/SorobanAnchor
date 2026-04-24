@@ -244,6 +244,32 @@ pub fn fetch_transaction_status(
     })
 }
 
+/// Normalize a list of raw SEP-6 transaction responses (from `GET /transactions`)
+/// into canonical [`TransactionStatusResponse`] values.
+///
+/// Entries with an empty `transaction_id` are silently skipped.
+pub fn list_transactions(
+    raw_list: alloc::vec::Vec<RawTransactionResponse>,
+) -> alloc::vec::Vec<TransactionStatusResponse> {
+    raw_list
+        .into_iter()
+        .filter(|r| !r.transaction_id.is_empty())
+        .map(|r| TransactionStatusResponse {
+            transaction_id: r.transaction_id,
+            kind: r
+                .kind
+                .as_deref()
+                .map(TransactionKind::from_str)
+                .unwrap_or(TransactionKind::Deposit),
+            status: TransactionStatus::from_str(&r.status),
+            amount_in: r.amount_in,
+            amount_out: r.amount_out,
+            amount_fee: r.amount_fee,
+            message: r.message,
+        })
+        .collect()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -360,5 +386,70 @@ mod tests {
         raw.kind = Some("withdraw".to_string());
         let resp = fetch_transaction_status(raw).unwrap();
         assert_eq!(resp.kind, TransactionKind::Withdrawal);
+    }
+
+    #[test]
+    fn test_list_transactions_normalizes_all() {
+        let raw_list = vec![
+            RawTransactionResponse {
+                transaction_id: "txn-001".to_string(),
+                kind: Some("deposit".to_string()),
+                status: "completed".to_string(),
+                amount_in: Some(100),
+                amount_out: Some(99),
+                amount_fee: Some(1),
+                message: None,
+            },
+            RawTransactionResponse {
+                transaction_id: "txn-002".to_string(),
+                kind: Some("withdrawal".to_string()),
+                status: "pending_external".to_string(),
+                amount_in: None,
+                amount_out: None,
+                amount_fee: None,
+                message: Some("awaiting bank".to_string()),
+            },
+        ];
+        let result = list_transactions(raw_list);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].transaction_id, "txn-001");
+        assert_eq!(result[0].status, TransactionStatus::Completed);
+        assert_eq!(result[0].kind, TransactionKind::Deposit);
+        assert_eq!(result[1].transaction_id, "txn-002");
+        assert_eq!(result[1].status, TransactionStatus::PendingExternal);
+        assert_eq!(result[1].kind, TransactionKind::Withdrawal);
+    }
+
+    #[test]
+    fn test_list_transactions_skips_empty_ids() {
+        let raw_list = vec![
+            RawTransactionResponse {
+                transaction_id: "".to_string(),
+                kind: None,
+                status: "completed".to_string(),
+                amount_in: None,
+                amount_out: None,
+                amount_fee: None,
+                message: None,
+            },
+            RawTransactionResponse {
+                transaction_id: "txn-valid".to_string(),
+                kind: None,
+                status: "completed".to_string(),
+                amount_in: Some(50),
+                amount_out: Some(49),
+                amount_fee: Some(1),
+                message: None,
+            },
+        ];
+        let result = list_transactions(raw_list);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].transaction_id, "txn-valid");
+    }
+
+    #[test]
+    fn test_list_transactions_empty_input() {
+        let result = list_transactions(vec![]);
+        assert!(result.is_empty());
     }
 }
