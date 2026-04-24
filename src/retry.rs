@@ -72,21 +72,20 @@ impl RetryConfig {
 
 /// Classify whether an error code is retryable.
 ///
-/// Retryable: transient network/server errors.
+/// Retryable: transient network/server errors (availability, rate limits, stale data).
 /// Non-retryable: auth failures, bad input, protocol violations.
-pub fn is_retryable(code: u32) -> bool {
+pub fn is_retryable(code: crate::errors::ErrorCode) -> bool {
     use crate::errors::ErrorCode;
-    matches!(
-        code,
-        // transport / availability
-        _ if code == ErrorCode::ServicesNotConfigured as u32
-            || code == ErrorCode::AttestationNotFound as u32
-            || code == ErrorCode::StaleQuote as u32
-            || code == ErrorCode::NoQuotesAvailable as u32
-            || code == ErrorCode::CacheExpired as u32
-            || code == ErrorCode::CacheNotFound as u32
-            || code == ErrorCode::RateLimitExceeded as u32
-    )
+    match code {
+        ErrorCode::ServicesNotConfigured
+        | ErrorCode::AttestationNotFound
+        | ErrorCode::StaleQuote
+        | ErrorCode::NoQuotesAvailable
+        | ErrorCode::CacheExpired
+        | ErrorCode::CacheNotFound
+        | ErrorCode::RateLimitExceeded => true,
+        _ => false,
+    }
 }
 
 /// Execute `f` with exponential backoff retry.
