@@ -17,6 +17,12 @@ module.exports = {
       lines: 80,
       statements: 80,
     },
+    './components/Sep10AuthFlow.tsx': {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
